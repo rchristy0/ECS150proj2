@@ -104,6 +104,13 @@ extern "C"
   void scheduler()
   {
     TVMThreadID tid;
+    TCB *oldThread, *newThread;
+    oldThread = allThreads[curID];
+    if(oldThread->t_state == VM_THREAD_STATE_RUNNING)
+    {
+      oldThread->t_state = VM_THREAD_STATE_READY;
+      setReady(oldThread);
+    }
     if(!readyHigh.empty())
     {
       tid = readyHigh[0]->t_id;
@@ -123,8 +130,6 @@ extern "C"
     {
       tid = 1; 
     }
-    TCB *oldThread, *newThread;
-    oldThread = allThreads[curID];
     newThread = allThreads[(int)tid];
     newThread->t_state = VM_THREAD_STATE_RUNNING;
     curID = tid;
@@ -144,9 +149,9 @@ extern "C"
         scheduler();
       }  
     }
-    TCB *curThread = allThreads[curID];
-    curThread->t_state = VM_THREAD_STATE_READY;
-    setReady(curThread);
+    // TCB *curThread = allThreads[curID];
+    // curThread->t_state = VM_THREAD_STATE_READY;
+    // setReady(curThread);
     scheduler();
   }
   
@@ -187,7 +192,7 @@ extern "C"
     TCB *mainThread = (TCB*)malloc(sizeof(TCB));
     mainThread->t_id = 0;
     mainThread->t_prio = VM_THREAD_PRIORITY_NORMAL;
-    mainThread->t_state = VM_THREAD_STATE_READY;
+    mainThread->t_state = VM_THREAD_STATE_RUNNING;
     allThreads.push_back(mainThread);
     
     TVMThreadID idleID;
@@ -435,14 +440,10 @@ extern "C"
     }
     MCB *myMutex = allMutex[(int)mutex];
     TCB *myThread = allThreads[curID];
-    cout << myThread->t_id << " acquiring ";
-    cout << myMutex->mutexID << " with ";
-    cout << timeout <<'\n';
     if(myMutex->ownerID == VM_THREAD_ID_INVALID)
     {
       myMutex->ownerID = myThread->t_id;
       myThread->heldMutex.push_back(myMutex);
-      cout << "acquired\n";
       MachineResumeSignals(&sigstate);
       return VM_STATUS_SUCCESS;
     }
@@ -473,7 +474,6 @@ extern "C"
     }
     else
     {
-      cout<<"going to sleep\n";
       VMThreadSleep(timeout);
       return VMMutexAcquire(mutex, VM_TIMEOUT_IMMEDIATE);
     } 
