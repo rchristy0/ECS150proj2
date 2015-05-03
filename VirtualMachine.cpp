@@ -442,6 +442,7 @@ extern "C"
     {
       myMutex->ownerID = myThread->t_id;
       myThread->heldMutex.push_back(myMutex);
+      cout << "acquired\n";
       MachineResumeSignals(&sigstate);
       return VM_STATUS_SUCCESS;
     }
