@@ -38,14 +38,14 @@ extern "C"
     unsigned int mutexID;
     unsigned int ownerID;
     vector<TCB*> waitHigh;
-    vector<TCB*> waitMed;
+    vector<TCB*> waitNorm;
     vector<TCB*> waitLow;
   } MCB; //struct
   
   int curID;
   vector<TCB*> allThreads;
   vector<TCB*> readyHigh;
-  vector<TCB*> readyMed;
+  vector<TCB*> readyNorm;
   vector<TCB*> readyLow;
   vector<TCB*> sleeping;
   vector<MCB*> allMutex;
@@ -59,7 +59,7 @@ extern "C"
         readyHigh.push_back(thread);
         break;
       case VM_THREAD_PRIORITY_NORMAL:
-        readyMed.push_back(thread);
+        readyNorm.push_back(thread);
         break;
       case VM_THREAD_PRIORITY_LOW:
         readyLow.push_back(thread);
@@ -81,11 +81,11 @@ extern "C"
           }
           break;
         case VM_THREAD_PRIORITY_NORMAL:
-          for(unsigned int i = 0; i < readyMed.size(); i++)
+          for(unsigned int i = 0; i < readyNorm.size(); i++)
           {
-            if (readyMed[i]->t_id == myThread->t_id)
+            if (readyNorm[i]->t_id == myThread->t_id)
             {
-              readyMed.erase(readyMed.begin() + i);
+              readyNorm.erase(readyNorm.begin() + i);
             }
           }
           break;
@@ -109,10 +109,10 @@ extern "C"
       tid = readyHigh[0]->t_id;
       readyHigh.erase(readyHigh.begin());
     }
-    else if (!readyMed.empty())
+    else if (!readyNorm.empty())
     {
-      tid = readyMed[0]->t_id;
-      readyMed.erase(readyMed.begin());
+      tid = readyNorm[0]->t_id;
+      readyNorm.erase(readyNorm.begin());
     }
     else if (!readyLow.empty())
     {
@@ -297,7 +297,10 @@ extern "C"
       unReady(myThread);
     }
     myThread->t_state = VM_THREAD_STATE_DEAD;
-    //release all held mutex
+    for(unsigned int i = 0; i < myThread->heldMutex.size(); i++)
+    {
+      VMMutexRelease(myThread->heldMutex[i]->mutexID);
+    }
     scheduler();
     MachineResumeSignals(&sigstate);
     return VM_STATUS_SUCCESS;
@@ -364,12 +367,13 @@ extern "C"
 
   TVMStatus VMMutexCreate(TVMMutexIDRef mutexref)
   {
-    if(mutexref == NULL)
-    {
-      return VM_STATUS_ERROR_INVALID_PARAMETER;
-    }
     TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
+    if(mutexref == NULL)
+    {
+      MachineResumeSignals(&sigstate);
+      return VM_STATUS_ERROR_INVALID_PARAMETER;
+    }
     MCB *newMutex = (MCB*)malloc(sizeof(MCB));
     *mutexref = allMutex.size();
     newMutex->mutexID = *mutexref;
@@ -401,13 +405,14 @@ extern "C"
   }
   
   TVMStatus VMMutexQuery(TVMMutexID mutex, TVMThreadIDRef ownerref)
-  {
-    if(ownerref == NULL)
-    {
-      return VM_STATUS_ERROR_INVALID_PARAMETER;
-    }
+  { 
     TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
+    if(ownerref == NULL)
+    {
+      MachineResumeSignals(&sigstate);
+      return VM_STATUS_ERROR_INVALID_PARAMETER;
+    }
     if(mutex < 0 || mutex > allMutex.size())
     {
       MachineResumeSignals(&sigstate);
@@ -423,20 +428,97 @@ extern "C"
   {
     TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
-    
-    
-    
-    MachineResumeSignals(&sigstate);
-    return VM_STATUS_SUCCESS;
+    if(mutex < 0 || mutex > allMutex.size())
+    {
+      MachineResumeSignals(&sigstate);
+      return VM_STATUS_ERROR_INVALID_ID;
+    }
+    MCB *myMutex = allMutex[(int)mutex];
+    TCB *myThread = allThreads[curID];
+    if(myMutex->ownerID == VM_THREAD_ID_INVALID)
+    {
+      myMutex->ownerID = myThread->t_id;
+      myThread->heldMutex.push_back(myMutex);
+      MachineResumeSignals(&sigstate);
+      return VM_STATUS_SUCCESS;
+    }
+    else if (timeout == VM_TIMEOUT_IMMEDIATE)
+    {
+      MachineResumeSignals(&sigstate);
+      return VM_STATUS_FAILURE;
+    }
+    else if (timeout == VM_TIMEOUT_INFINITE)
+    {
+      myThread->t_state = VM_THREAD_STATE_WAITING;
+      TVMThreadPriority prio = myThread->t_prio;
+      switch (prio)
+      {
+        case VM_THREAD_PRIORITY_HIGH:
+          myMutex->waitHigh.push_back(myThread);
+          break;
+        case VM_THREAD_PRIORITY_NORMAL:
+          myMutex->waitNorm.push_back(myThread);
+          break;
+        case VM_THREAD_PRIORITY_LOW:
+          myMutex->waitLow.push_back(myThread);
+          break;
+      }
+      scheduler();
+      MachineResumeSignals(&sigstate);
+      return VM_STATUS_SUCCESS;
+    }
+    else
+    {
+      cout<<"going to sleep\n";
+      VMThreadSleep(timeout);
+      return VMMutexAcquire(mutex, VM_TIMEOUT_IMMEDIATE);
+    } 
   }  
   
   TVMStatus VMMutexRelease(TVMMutexID mutex)
   {
     TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
-    
-    
-    
+    if(mutex < 0 || mutex > allMutex.size())
+    {
+      MachineResumeSignals(&sigstate);
+      return VM_STATUS_ERROR_INVALID_ID;
+    }
+    MCB *myMutex = allMutex[(int)mutex];
+    TCB *myThread = allThreads[curID];
+    if(myMutex->ownerID != myThread->t_id)
+    {
+      MachineResumeSignals(&sigstate);
+      return VM_STATUS_ERROR_INVALID_STATE;
+    }
+    myMutex->ownerID = VM_THREAD_ID_INVALID;
+    TCB *tempThread;
+    if(!myMutex->waitHigh.empty())
+    {
+      tempThread = myMutex->waitHigh[0];
+      myMutex->waitHigh.erase(myMutex->waitHigh.begin());
+      setReady(tempThread);
+    }
+    else if (!myMutex->waitNorm.empty())
+    {
+      tempThread = myMutex->waitNorm[0];
+      myMutex->waitNorm.erase(myMutex->waitNorm.begin());
+      setReady(tempThread);
+    }
+    else if (!myMutex->waitLow.empty())
+    {
+      tempThread = myMutex->waitLow[0];
+      myMutex->waitLow.erase(myMutex->waitLow.begin());
+      setReady(tempThread);
+    }
+    else
+    {
+      tempThread = NULL;
+    }
+    if(tempThread != NULL && tempThread->t_prio > myThread->t_prio)
+    {
+      scheduler();
+    }
     MachineResumeSignals(&sigstate);
     return VM_STATUS_SUCCESS;
   }
@@ -499,12 +581,13 @@ extern "C"
   
   TVMStatus VMFileWrite(int filedescriptor, void *data, int *length)
   {
-    if (data == NULL || length == NULL)
-    {
-      return VM_STATUS_ERROR_INVALID_PARAMETER;
-    }
     TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
+    if (data == NULL || length == NULL)
+    {
+      MachineResumeSignals(&sigstate);
+      return VM_STATUS_ERROR_INVALID_PARAMETER;
+    }
     TCB *myThread = allThreads[curID];
     MachineFileWrite(filedescriptor, data, *length, FileIOCallback, myThread);
     threadWait(myThread);
