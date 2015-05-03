@@ -3,11 +3,7 @@
 #include "vector"
 #include "stdlib.h"
 
-#include "unistd.h"
-#include "errno.h"
-
-#include "iostream" //delete this
-using namespace std; //also this
+using namespace std;
 
 extern "C"
 {
@@ -31,7 +27,7 @@ extern "C"
     TVMTick t_ticks;
     int t_fileData;
     vector<MCB*> heldMutex;
-  } TCB; // struct
+  } TCB;
   
   typedef struct MCB
   {
@@ -40,7 +36,7 @@ extern "C"
     vector<TCB*> waitHigh;
     vector<TCB*> waitNorm;
     vector<TCB*> waitLow;
-  } MCB; //struct
+  } MCB;
   
   int curID;
   vector<TCB*> allThreads;
@@ -149,9 +145,6 @@ extern "C"
         scheduler();
       }  
     }
-    // TCB *curThread = allThreads[curID];
-    // curThread->t_state = VM_THREAD_STATE_READY;
-    // setReady(curThread);
     scheduler();
   }
   
