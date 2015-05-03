@@ -16,6 +16,7 @@ extern "C"
   void VMUnloadModule(void);
   TVMStatus VMFilePrint(int filedescriptor, const char *format, ...);
   
+  struct MCB;
   
   typedef struct TCB
   {
@@ -29,17 +30,25 @@ extern "C"
     SMachineContext t_context;
     TVMTick t_ticks;
     int t_fileData;
-    // Possibly neew mutex id.
-    // Possibly hold a list of held mutexes
+    vector<MCB*> heldMutex;
   } TCB; // struct
   
+  typedef struct MCB
+  {
+    unsigned int mutexID;
+    unsigned int ownerID;
+    vector<TCB*> waitHigh;
+    vector<TCB*> waitMed;
+    vector<TCB*> waitLow;
+  } MCB; //struct
+  
   int curID;
-  TMachineSignalState sigstate;
   vector<TCB*> allThreads;
   vector<TCB*> readyHigh;
   vector<TCB*> readyMed;
   vector<TCB*> readyLow;
   vector<TCB*> sleeping;
+  vector<MCB*> allMutex;
   
   void setReady(TCB* thread)
   {
@@ -200,6 +209,7 @@ extern "C"
 
   TVMStatus VMThreadCreate(TVMThreadEntry entry, void *param, TVMMemorySize memsize, TVMThreadPriority prio, TVMThreadIDRef tid)
   {
+    TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
     if(entry == NULL || tid == NULL)
     {
@@ -222,6 +232,7 @@ extern "C"
   
   TVMStatus VMThreadDelete(TVMThreadID thread)
   {
+    TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
     if(thread < 0 || thread > allThreads.size())
     {
@@ -242,6 +253,7 @@ extern "C"
   
   TVMStatus VMThreadActivate(TVMThreadID thread)
   {
+    TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
     TCB *myThread = allThreads[(int)thread];
     MachineContextCreate(&myThread->t_context, skeleton, myThread, myThread->stk_ptr, myThread->t_memsize);
@@ -257,6 +269,7 @@ extern "C"
   
   TVMStatus VMThreadTerminate(TVMThreadID thread)
   {
+    TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
     if(thread < 0 || thread > allThreads.size())
     {
@@ -284,6 +297,7 @@ extern "C"
       unReady(myThread);
     }
     myThread->t_state = VM_THREAD_STATE_DEAD;
+    //release all held mutex
     scheduler();
     MachineResumeSignals(&sigstate);
     return VM_STATUS_SUCCESS;
@@ -291,6 +305,7 @@ extern "C"
   
   TVMStatus VMThreadID(TVMThreadIDRef threadref)
   {
+    TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
     if(threadref == NULL)
     {
@@ -304,6 +319,7 @@ extern "C"
   
   TVMStatus VMThreadState(TVMThreadID thread, TVMThreadStateRef stateref)
   {
+    TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
     if(thread < 0 || thread > allThreads.size())
     {
@@ -322,6 +338,7 @@ extern "C"
   
   TVMStatus VMThreadSleep(TVMTick tick)
   {
+    TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
     if(tick == VM_TIMEOUT_INFINITE)
     {
@@ -345,14 +362,88 @@ extern "C"
     return VM_STATUS_SUCCESS;
   }
 
-  TVMStatus VMMutexCreate(TVMMutexIDRef mutexref);
-  TVMStatus VMMutexDelete(TVMMutexID mutex);
-  TVMStatus VMMutexQuery(TVMMutexID mutex, TVMThreadIDRef ownerref);
-  TVMStatus VMMutexAcquire(TVMMutexID mutex, TVMTick timeout);     
-  TVMStatus VMMutexRelease(TVMMutexID mutex);
+  TVMStatus VMMutexCreate(TVMMutexIDRef mutexref)
+  {
+    if(mutexref == NULL)
+    {
+      return VM_STATUS_ERROR_INVALID_PARAMETER;
+    }
+    TMachineSignalState sigstate;
+    MachineSuspendSignals(&sigstate);
+    MCB *newMutex = (MCB*)malloc(sizeof(MCB));
+    *mutexref = allMutex.size();
+    newMutex->mutexID = *mutexref;
+    newMutex->ownerID = VM_THREAD_ID_INVALID;
+    allMutex.push_back(newMutex);
+    MachineResumeSignals(&sigstate);
+    return VM_STATUS_SUCCESS;
+  }
+  
+  TVMStatus VMMutexDelete(TVMMutexID mutex)
+  {
+    TMachineSignalState sigstate;
+    MachineSuspendSignals(&sigstate);
+    if(mutex < 0 || mutex > allMutex.size())
+    {
+      MachineResumeSignals(&sigstate);
+      return VM_STATUS_ERROR_INVALID_ID;
+    }
+    MCB *myMutex = allMutex[(int)mutex];
+    if(myMutex->ownerID != VM_THREAD_ID_INVALID)
+    {
+      MachineResumeSignals(&sigstate);
+      return VM_STATUS_ERROR_INVALID_STATE;
+    }
+    allMutex.erase(allMutex.begin() + myMutex->mutexID);
+    allMutex.insert(allMutex.begin() + myMutex->mutexID, NULL);
+    MachineResumeSignals(&sigstate);
+    return VM_STATUS_SUCCESS;
+  }
+  
+  TVMStatus VMMutexQuery(TVMMutexID mutex, TVMThreadIDRef ownerref)
+  {
+    if(ownerref == NULL)
+    {
+      return VM_STATUS_ERROR_INVALID_PARAMETER;
+    }
+    TMachineSignalState sigstate;
+    MachineSuspendSignals(&sigstate);
+    if(mutex < 0 || mutex > allMutex.size())
+    {
+      MachineResumeSignals(&sigstate);
+      return VM_STATUS_ERROR_INVALID_ID;
+    }
+    MCB *myMutex = allMutex[mutex];
+    *ownerref = myMutex->ownerID;
+    MachineResumeSignals(&sigstate);
+    return VM_STATUS_SUCCESS;
+  }
+  
+  TVMStatus VMMutexAcquire(TVMMutexID mutex, TVMTick timeout)
+  {
+    TMachineSignalState sigstate;
+    MachineSuspendSignals(&sigstate);
+    
+    
+    
+    MachineResumeSignals(&sigstate);
+    return VM_STATUS_SUCCESS;
+  }  
+  
+  TVMStatus VMMutexRelease(TVMMutexID mutex)
+  {
+    TMachineSignalState sigstate;
+    MachineSuspendSignals(&sigstate);
+    
+    
+    
+    MachineResumeSignals(&sigstate);
+    return VM_STATUS_SUCCESS;
+  }
   
   TVMStatus VMFileOpen(const char *filename, int flags, int mode, int *filedescriptor)
   {
+    TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
     if(filename == NULL || filedescriptor == NULL)
     {
@@ -369,6 +460,7 @@ extern "C"
   
   TVMStatus VMFileClose(int filedescriptor)
   {
+    TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
     TCB *myThread = allThreads[curID];
     MachineFileClose(filedescriptor, FileIOCallback, myThread);
@@ -387,6 +479,7 @@ extern "C"
   
   TVMStatus VMFileRead(int filedescriptor, void *data, int *length)
   {
+    TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
     TCB *myThread = allThreads[curID];
     MachineFileRead(filedescriptor, data, *length, FileIOCallback, myThread);
@@ -410,6 +503,7 @@ extern "C"
     {
       return VM_STATUS_ERROR_INVALID_PARAMETER;
     }
+    TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
     TCB *myThread = allThreads[curID];
     MachineFileWrite(filedescriptor, data, *length, FileIOCallback, myThread);
@@ -429,6 +523,7 @@ extern "C"
   
   TVMStatus VMFileSeek(int filedescriptor, int offset, int whence, int *newoffset)
   {
+    TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
     TCB *myThread = allThreads[curID];
     MachineFileSeek(filedescriptor,offset, whence, FileIOCallback, myThread);
