@@ -435,7 +435,7 @@ extern "C"
     }
     MCB *myMutex = allMutex[(int)mutex];
     TCB *myThread = allThreads[curID];
-    cout << myThread->t_tid << " acquiring ";
+    cout << myThread->t_id << " acquiring ";
     cout << myMutex->mutexID << " with ";
     cout << timeout <<'\n';
     if(myMutex->ownerID == VM_THREAD_ID_INVALID)
