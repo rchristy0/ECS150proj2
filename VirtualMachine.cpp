@@ -3,7 +3,6 @@
 #include "vector"
 #include "stdlib.h"
 
-#include "iostream"
 using namespace std;
 
 extern "C"
@@ -138,7 +137,6 @@ extern "C"
     //set new thread to running then switch to it
     newThread = allThreads[(int)tid];
     newThread->t_state = VM_THREAD_STATE_RUNNING;
-    cout << curID<< " switches to " << tid<< '\n';
     curID = tid;
     MachineContextSwitch(&oldThread->t_context, &newThread->t_context);
   }
@@ -167,11 +165,10 @@ extern "C"
   void FileIOCallback(void *calldata, int result)
   {
     TCB* myThread = (TCB*) calldata;
-    cout << "callback from " << myThread->t_id << '\n';
     myThread->t_fileData = result;
     myThread->t_state = VM_THREAD_STATE_READY;
     setReady(myThread);
-    // scheduler();
+    scheduler();
   }
   
   //set a thread to wait mode
