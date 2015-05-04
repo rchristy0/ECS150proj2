@@ -3,6 +3,7 @@
 #include "vector"
 #include "stdlib.h"
 
+#include "iostream"
 using namespace std;
 
 extern "C"
@@ -56,6 +57,7 @@ extern "C"
         break;
       case VM_THREAD_PRIORITY_NORMAL:
         readyNorm.push_back(thread);
+        // cout << "thred "<<thread->t_id<<" pushed to norm\n";
         break;
       case VM_THREAD_PRIORITY_LOW:
         readyLow.push_back(thread);
@@ -128,6 +130,7 @@ extern "C"
     }
     newThread = allThreads[(int)tid];
     newThread->t_state = VM_THREAD_STATE_RUNNING;
+    // cout<<"switching from "<<curID<<" to " <<tid<<'\n';
     curID = tid;
     MachineContextSwitch(&oldThread->t_context, &newThread->t_context);
   }
@@ -145,6 +148,9 @@ extern "C"
         scheduler();
       }  
     }
+    TCB *curThread = allThreads[curID];
+    curThread->t_state = VM_THREAD_STATE_READY;
+    setReady(curThread);
     scheduler();
   }
   
