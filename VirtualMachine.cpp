@@ -15,7 +15,8 @@ extern "C"
   
   struct MCB;
   
-  typedef struct TCB
+  //contains all values a thread needs
+  typedef struct TCB //Thread Control Block
   {
     TVMThreadID t_id;
     TVMThreadPriority t_prio;
@@ -30,7 +31,8 @@ extern "C"
     vector<MCB*> heldMutex;
   } TCB;
   
-  typedef struct MCB
+  //contains all values a mutex needs
+  typedef struct MCB //Mutex Control Block
   {
     unsigned int mutexID;
     unsigned int ownerID;
@@ -47,6 +49,8 @@ extern "C"
   vector<TCB*> sleeping;
   vector<MCB*> allMutex;
   
+  
+  //check the priority of thread and add to appropriate ready queue
   void setReady(TCB* thread)
   {
     TVMThreadPriority prio = thread->t_prio;
@@ -57,7 +61,6 @@ extern "C"
         break;
       case VM_THREAD_PRIORITY_NORMAL:
         readyNorm.push_back(thread);
-        // cout << "thred "<<thread->t_id<<" pushed to norm\n";
         break;
       case VM_THREAD_PRIORITY_LOW:
         readyLow.push_back(thread);
@@ -65,14 +68,15 @@ extern "C"
     }
   }
   
-  void unReady(TCB* myThread)
+  //check the priority of thread and remove from appropriate ready queue
+  void unReady(TCB* thread)
   {
-    switch(myThread->t_prio)
+    switch(thread->t_prio)
       {
         case VM_THREAD_PRIORITY_HIGH:
           for(unsigned int i = 0; i < readyHigh.size(); i++)
           {
-            if (readyHigh[i]->t_id == myThread->t_id)
+            if (readyHigh[i]->t_id == thread->t_id)
             {
               readyHigh.erase(readyHigh.begin() + i);
             }
@@ -81,7 +85,7 @@ extern "C"
         case VM_THREAD_PRIORITY_NORMAL:
           for(unsigned int i = 0; i < readyNorm.size(); i++)
           {
-            if (readyNorm[i]->t_id == myThread->t_id)
+            if (readyNorm[i]->t_id == thread->t_id)
             {
               readyNorm.erase(readyNorm.begin() + i);
             }
@@ -90,7 +94,7 @@ extern "C"
         case VM_THREAD_PRIORITY_LOW:
           for(unsigned int i = 0; i < readyLow.size(); i++)
           {
-            if (readyLow[i]->t_id == myThread->t_id)
+            if (readyLow[i]->t_id == thread->t_id)
             {
               readyLow.erase(readyLow.begin() + i);
             }
@@ -99,16 +103,19 @@ extern "C"
       }
   }
   
+  //schedule next thread to run
   void scheduler()
   {
     TVMThreadID tid;
     TCB *oldThread, *newThread;
     oldThread = allThreads[curID];
+    //ready old thread if its running
     if(oldThread->t_state == VM_THREAD_STATE_RUNNING)
     {
       oldThread->t_state = VM_THREAD_STATE_READY;
       setReady(oldThread);
     }
+    //select a thread from highest priority ready queue
     if(!readyHigh.empty())
     {
       tid = readyHigh[0]->t_id;
@@ -124,22 +131,26 @@ extern "C"
       tid = readyLow[0]->t_id;
       readyLow.erase(readyLow.begin());
     }
-    else
+    else //if all ready queues are empty select idle thread
     {
       tid = 1; 
     }
+    //set new thread to running then switch to it
     newThread = allThreads[(int)tid];
     newThread->t_state = VM_THREAD_STATE_RUNNING;
-    // cout<<"switching from "<<curID<<" to " <<tid<<'\n';
+    cout << curID<< " switches to " << tid<< '\n';
     curID = tid;
     MachineContextSwitch(&oldThread->t_context, &newThread->t_context);
   }
   
+  //things to do every tick
   void AlarmCallback (void *calldata)
   {
+    //decrement the tick count for every thread sleeping
     for(unsigned int i = 0; i < sleeping.size(); i++)
     {
       sleeping[i]->t_ticks--;
+      //if the thread is done sleeping ready it
       if(sleeping[i]->t_ticks == 0)
       {
         sleeping[i]->t_state = VM_THREAD_STATE_READY;
@@ -148,21 +159,22 @@ extern "C"
         scheduler();
       }  
     }
-    TCB *curThread = allThreads[curID];
-    curThread->t_state = VM_THREAD_STATE_READY;
-    setReady(curThread);
+    //run the scheduler 
     scheduler();
   }
   
+  //store the result from the file operation and then ready the thread
   void FileIOCallback(void *calldata, int result)
   {
     TCB* myThread = (TCB*) calldata;
+    cout << "callback from " << myThread->t_id << '\n';
     myThread->t_fileData = result;
     myThread->t_state = VM_THREAD_STATE_READY;
     setReady(myThread);
-    scheduler();
+    // scheduler();
   }
   
+  //set a thread to wait mode
   void threadWait(TCB* myThread)
   {
     myThread->t_state = VM_THREAD_STATE_WAITING;
@@ -170,6 +182,7 @@ extern "C"
     scheduler();
   }
   
+  //run the entry function then terminate
   void skeleton(void * param)
   {
     TCB* thread = (TCB*) param;
@@ -178,14 +191,17 @@ extern "C"
     VMThreadTerminate(thread->t_id);
   }
   
+  //loop forever
   void idleFunc(void *)
   {
     MachineEnableSignals();
     while (1);
   }
  
+  //initialize the VM
   TVMStatus VMStart(int tickms, int machinetickms, int argc, char *argv[])
   {
+    //build main thread then add to allThreads
     curID = 0;
     const char *module = argv[0];
     TCB *mainThread = (TCB*)malloc(sizeof(TCB));
@@ -194,23 +210,28 @@ extern "C"
     mainThread->t_state = VM_THREAD_STATE_RUNNING;
     allThreads.push_back(mainThread);
     
+    //create idle thread
     TVMThreadID idleID;
     VMThreadCreate(idleFunc, NULL, 0x100000, 0, &idleID);
     VMThreadActivate(idleID);
     
+    //try to load the module
     TVMMainEntry VMMain = VMLoadModule(module);
     if (VMMain == NULL)
     {
       return VM_STATUS_FAILURE;
     }
-
+    
+    //machine initializations
     MachineInitialize(machinetickms);
     MachineRequestAlarm(tickms * 1000, AlarmCallback, NULL);
     MachineEnableSignals();
+    //main entry call
     VMMain(argc, argv);
     return VM_STATUS_SUCCESS;
   }
 
+  //creates a new thread and adds it to allThreads
   TVMStatus VMThreadCreate(TVMThreadEntry entry, void *param, TVMMemorySize memsize, TVMThreadPriority prio, TVMThreadIDRef tid)
   {
     TMachineSignalState sigstate;
@@ -234,6 +255,7 @@ extern "C"
     return VM_STATUS_SUCCESS;
   }
   
+  //delete a thread from the VM
   TVMStatus VMThreadDelete(TVMThreadID thread)
   {
     TMachineSignalState sigstate;
@@ -255,6 +277,7 @@ extern "C"
     return VM_STATUS_SUCCESS;
   }
   
+  //set a thread to the ready state and add to ready queue
   TVMStatus VMThreadActivate(TVMThreadID thread)
   {
     TMachineSignalState sigstate;
@@ -271,6 +294,7 @@ extern "C"
     return VM_STATUS_SUCCESS;
   }
   
+  //set a living thread to dead and remove from waiting and ready queues
   TVMStatus VMThreadTerminate(TVMThreadID thread)
   {
     TMachineSignalState sigstate;
@@ -286,6 +310,7 @@ extern "C"
       MachineResumeSignals(&sigstate);
       return VM_STATUS_ERROR_INVALID_STATE;
     }
+    //remove from waiting and ready queues
     if(myThread->t_state == VM_THREAD_STATE_WAITING)
     {
       for(unsigned int i = 0; i < sleeping.size(); i++)
@@ -301,6 +326,7 @@ extern "C"
       unReady(myThread);
     }
     myThread->t_state = VM_THREAD_STATE_DEAD;
+    //release all held mutex
     for(unsigned int i = 0; i < myThread->heldMutex.size(); i++)
     {
       VMMutexRelease(myThread->heldMutex[i]->mutexID);
@@ -310,6 +336,7 @@ extern "C"
     return VM_STATUS_SUCCESS;
   }
   
+  //put the current thread id into threadref
   TVMStatus VMThreadID(TVMThreadIDRef threadref)
   {
     TMachineSignalState sigstate;
@@ -324,6 +351,7 @@ extern "C"
     return VM_STATUS_SUCCESS;
   }
   
+  //put the state of thread into stateref
   TVMStatus VMThreadState(TVMThreadID thread, TVMThreadStateRef stateref)
   {
     TMachineSignalState sigstate;
@@ -343,32 +371,37 @@ extern "C"
     return VM_STATUS_SUCCESS;
   }
   
+  //sleep a thread for tick ticks
   TVMStatus VMThreadSleep(TVMTick tick)
   {
     TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
+    //cannot sleep forever
     if(tick == VM_TIMEOUT_INFINITE)
     {
       MachineResumeSignals(&sigstate);
       return VM_STATUS_ERROR_INVALID_PARAMETER;
     } 
+    //immediate sets current thread to end of ready queue then schedules
     else if (tick == VM_TIMEOUT_IMMEDIATE)
     {
       allThreads[curID]->t_state = VM_THREAD_STATE_READY;
       setReady(allThreads[curID]);
       scheduler();
     }
+    //set the tick count and state to waiting
     else
     {
-    allThreads[curID]->t_ticks = tick;
-    allThreads[curID]->t_state = VM_THREAD_STATE_WAITING;
-    sleeping.push_back(allThreads[curID]);
-    scheduler();
+      allThreads[curID]->t_ticks = tick;
+      allThreads[curID]->t_state = VM_THREAD_STATE_WAITING;
+      sleeping.push_back(allThreads[curID]);
+      scheduler();
     }
     MachineResumeSignals(&sigstate);
     return VM_STATUS_SUCCESS;
   }
 
+  //creates a new mutex and put mutexId into mutexref
   TVMStatus VMMutexCreate(TVMMutexIDRef mutexref)
   {
     TMachineSignalState sigstate;
@@ -381,12 +414,13 @@ extern "C"
     MCB *newMutex = (MCB*)malloc(sizeof(MCB));
     *mutexref = allMutex.size();
     newMutex->mutexID = *mutexref;
-    newMutex->ownerID = VM_THREAD_ID_INVALID;
-    allMutex.push_back(newMutex);
+    newMutex->ownerID = VM_THREAD_ID_INVALID; //no owner
+    allMutex.push_back(newMutex); //add to mutex vector
     MachineResumeSignals(&sigstate);
     return VM_STATUS_SUCCESS;
   }
   
+  //deletes mutex 
   TVMStatus VMMutexDelete(TVMMutexID mutex)
   {
     TMachineSignalState sigstate;
@@ -397,17 +431,19 @@ extern "C"
       return VM_STATUS_ERROR_INVALID_ID;
     }
     MCB *myMutex = allMutex[(int)mutex];
+    //cannot delete held mutex
     if(myMutex->ownerID != VM_THREAD_ID_INVALID)
     {
       MachineResumeSignals(&sigstate);
       return VM_STATUS_ERROR_INVALID_STATE;
     }
     allMutex.erase(allMutex.begin() + myMutex->mutexID);
-    allMutex.insert(allMutex.begin() + myMutex->mutexID, NULL);
+    allMutex.insert(allMutex.begin() + myMutex->mutexID, NULL); //fill removed spot with null so mutexID still corresponds to index in allMutex
     MachineResumeSignals(&sigstate);
     return VM_STATUS_SUCCESS;
   }
   
+  //put the ownerID into ownerref
   TVMStatus VMMutexQuery(TVMMutexID mutex, TVMThreadIDRef ownerref)
   { 
     TMachineSignalState sigstate;
@@ -428,6 +464,7 @@ extern "C"
     return VM_STATUS_SUCCESS;
   }
   
+  //acquire a mutex
   TVMStatus VMMutexAcquire(TVMMutexID mutex, TVMTick timeout)
   {
     TMachineSignalState sigstate;
@@ -439,6 +476,7 @@ extern "C"
     }
     MCB *myMutex = allMutex[(int)mutex];
     TCB *myThread = allThreads[curID];
+    //if not held acquire
     if(myMutex->ownerID == VM_THREAD_ID_INVALID)
     {
       myMutex->ownerID = myThread->t_id;
@@ -446,11 +484,13 @@ extern "C"
       MachineResumeSignals(&sigstate);
       return VM_STATUS_SUCCESS;
     }
+    //fail immediately
     else if (timeout == VM_TIMEOUT_IMMEDIATE)
     {
       MachineResumeSignals(&sigstate);
       return VM_STATUS_FAILURE;
     }
+    //add thread to appropriate wait queue
     else if (timeout == VM_TIMEOUT_INFINITE)
     {
       myThread->t_state = VM_THREAD_STATE_WAITING;
@@ -471,6 +511,7 @@ extern "C"
       MachineResumeSignals(&sigstate);
       return VM_STATUS_SUCCESS;
     }
+    //sleep the specified amount then check if mutex can be acquired
     else
     {
       VMThreadSleep(timeout);
@@ -478,6 +519,7 @@ extern "C"
     } 
   }  
   
+  //release a mutex
   TVMStatus VMMutexRelease(TVMMutexID mutex)
   {
     TMachineSignalState sigstate;
@@ -489,6 +531,7 @@ extern "C"
     }
     MCB *myMutex = allMutex[(int)mutex];
     TCB *myThread = allThreads[curID];
+    //can only release a mutex that you own
     if(myMutex->ownerID != myThread->t_id)
     {
       MachineResumeSignals(&sigstate);
@@ -496,21 +539,25 @@ extern "C"
     }
     myMutex->ownerID = VM_THREAD_ID_INVALID;
     TCB *tempThread;
+    //check wait queues to see who gets it next then ready that thread
     if(!myMutex->waitHigh.empty())
     {
       tempThread = myMutex->waitHigh[0];
+      myMutex->ownerID = tempThread->t_id;
       myMutex->waitHigh.erase(myMutex->waitHigh.begin());
       setReady(tempThread);
     }
     else if (!myMutex->waitNorm.empty())
     {
       tempThread = myMutex->waitNorm[0];
+      myMutex->ownerID = tempThread->t_id;
       myMutex->waitNorm.erase(myMutex->waitNorm.begin());
       setReady(tempThread);
     }
     else if (!myMutex->waitLow.empty())
     {
       tempThread = myMutex->waitLow[0];
+      myMutex->ownerID = tempThread->t_id;
       myMutex->waitLow.erase(myMutex->waitLow.begin());
       setReady(tempThread);
     }
@@ -518,6 +565,7 @@ extern "C"
     {
       tempThread = NULL;
     }
+    //if new thread has higher priority switch to it
     if(tempThread != NULL && tempThread->t_prio > myThread->t_prio)
     {
       scheduler();
@@ -526,6 +574,7 @@ extern "C"
     return VM_STATUS_SUCCESS;
   }
   
+  //open a file
   TVMStatus VMFileOpen(const char *filename, int flags, int mode, int *filedescriptor)
   {
     TMachineSignalState sigstate;
@@ -543,6 +592,7 @@ extern "C"
     return VM_STATUS_SUCCESS;
   }
   
+  //close a file
   TVMStatus VMFileClose(int filedescriptor)
   {
     TMachineSignalState sigstate;
@@ -562,6 +612,7 @@ extern "C"
     }  
   } 
   
+  //read from a file
   TVMStatus VMFileRead(int filedescriptor, void *data, int *length)
   {
     TMachineSignalState sigstate;
@@ -582,6 +633,7 @@ extern "C"
     }
   }
   
+  //write to a file
   TVMStatus VMFileWrite(int filedescriptor, void *data, int *length)
   {
     TMachineSignalState sigstate;
@@ -607,6 +659,7 @@ extern "C"
     }
   }
   
+  //move the start point for a read
   TVMStatus VMFileSeek(int filedescriptor, int offset, int whence, int *newoffset)
   {
     TMachineSignalState sigstate;
