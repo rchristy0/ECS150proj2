@@ -168,7 +168,7 @@ extern "C"
     myThread->t_fileData = result;
     myThread->t_state = VM_THREAD_STATE_READY;
     setReady(myThread);
-    scheduler();
+    // scheduler(); //preempt works with this commented out
   }
   
   //set a thread to wait mode
